@@ -81,7 +81,14 @@ export default function Home() {
     }
   };
 
-  // Polling for generation status - polls all pending prompts
+  // Manage isGenerating state based on pending prompts
+  useEffect(() => {
+    if (pendingPrompts.length === 0) {
+      setIsGenerating(false);
+    }
+  }, [pendingPrompts]);
+
+  // Polling for generation status - polls all pending prompts independently
   useEffect(() => {
     if (pendingPrompts.length > 0) {
       const poll = async () => {
@@ -89,43 +96,31 @@ export default function Home() {
         isPolling.current = true;
 
         try {
-          const results = await Promise.all(
+          // Trigger checks for all prompts, but handle results individually
+          await Promise.all(
             pendingPrompts.map(async (p) => {
               try {
                 const status = await checkStatus(p.promptId, p.apiIndex, "poll");
-                return { ...p, status };
+
+                if (status.status === "ready") {
+                  // Update state immediately
+                  setUploadingPrompts(prev => {
+                    if (prev.some(item => item.promptId === p.promptId)) return prev;
+                    return [...prev, p];
+                  });
+
+                  setPendingPrompts(prev => prev.filter(item => item.promptId !== p.promptId));
+                  finalizeUpload(p); // Start upload
+                } else if (status.status === "error") {
+                  console.error("Generation error:", status.error);
+                  // Remove erroneous prompt so we don't block
+                  setPendingPrompts(prev => prev.filter(item => item.promptId !== p.promptId));
+                }
               } catch (error) {
-                return { ...p, status: { status: "error", error: String(error) } };
+                console.error("Poll error for " + p.promptId, error);
               }
             })
           );
-
-          // Collect completed images and remaining pending
-          const stillPending: PendingPrompt[] = [];
-          const readyToUpload: PendingPrompt[] = [];
-
-          for (const r of results) {
-            if (r.status.status === "ready") {
-              readyToUpload.push({ promptId: r.promptId, apiIndex: r.apiIndex });
-            } else if (r.status.status === "error") {
-              console.error("Generation error:", r.status.error);
-            } else {
-              stillPending.push({ promptId: r.promptId, apiIndex: r.apiIndex });
-            }
-          }
-
-          if (readyToUpload.length > 0) {
-            setUploadingPrompts(prev => [...prev, ...readyToUpload]);
-            readyToUpload.forEach(p => finalizeUpload(p));
-          }
-
-          if (stillPending.length !== pendingPrompts.length) {
-            setPendingPrompts(stillPending);
-          }
-
-          if (stillPending.length === 0) {
-            setIsGenerating(false);
-          }
         } finally {
           isPolling.current = false;
         }
