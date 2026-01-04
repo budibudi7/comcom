@@ -16,6 +16,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const promptId = searchParams.get("promptId");
     const apiIndex = searchParams.get("apiIndex");
+    const action = searchParams.get("action"); // "poll" or "retrieve"
 
     if (!promptId) {
         return NextResponse.json({ status: "error", error: "Missing promptId" }, { status: 400 });
@@ -76,6 +77,21 @@ export async function GET(request: Request) {
         }
 
         if (images.length > 0) {
+            // Poll Mode: Just return that it is ready, don't upload yet
+            if (action !== "retrieve") {
+                return NextResponse.json({
+                    status: "ready",
+                    images: images.map(img => ({
+                        // Return raw info for retrieval later
+                        filename: img.filename,
+                        subfolder: img.subfolder,
+                        type: img.type,
+                        metadata: metadata
+                    }))
+                });
+            }
+
+            // Retrieve Mode: Upload to Drive
             const resultImages = await Promise.all(images.map(async img => {
                 const originalUrl = getImageUrl(img.filename, img.subfolder, img.type, targetApiUrl);
 

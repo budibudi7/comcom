@@ -14,6 +14,7 @@ type PendingPrompt = { promptId: string; apiIndex: number };
 export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [pendingPrompts, setPendingPrompts] = useState<PendingPrompt[]>([]);
+  const [uploadingPrompts, setUploadingPrompts] = useState<PendingPrompt[]>([]);
   const [images, setImages] = useState<GeneratedImage[]>([]);
   const [previewImages, setPreviewImages] = useState<GeneratedImage[]>([]);
   const [activeTab, setActiveTab] = useState<"create" | "gallery">("create");
@@ -42,16 +43,36 @@ export default function Home() {
     }
   }, [images]);
 
-  const checkStatus = async (promptId: string, apiIndex: number) => {
+  const checkStatus = async (promptId: string, apiIndex: number, action: "poll" | "retrieve" = "poll") => {
     const params = new URLSearchParams();
     params.set("promptId", promptId);
     params.set("apiIndex", apiIndex.toString());
+    params.set("action", action);
 
     // Use relative URL for client-side fetch matches current origin
     const res = await fetch(`/api/status?${params.toString()}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Status check failed");
     return data;
+  };
+
+  const finalizeUpload = async (p: PendingPrompt) => {
+    try {
+      const res = await checkStatus(p.promptId, p.apiIndex, "retrieve");
+      if (res.status === "completed" && res.images) {
+        const incoming = res.images as unknown as GeneratedImage[];
+
+        setPreviewImages(prev => {
+          const filtered = incoming.filter(img => !prev.some(p => p.url === img.url));
+          return [...prev, ...filtered];
+        });
+
+        setUploadingPrompts(prev => prev.filter(item => item.promptId !== p.promptId));
+      }
+    } catch (e) {
+      console.error("Upload failed", e);
+      setUploadingPrompts(prev => prev.filter(item => item.promptId !== p.promptId));
+    }
   };
 
   // Polling for generation status - polls all pending prompts
@@ -65,7 +86,7 @@ export default function Home() {
           const results = await Promise.all(
             pendingPrompts.map(async (p) => {
               try {
-                const status = await checkStatus(p.promptId, p.apiIndex);
+                const status = await checkStatus(p.promptId, p.apiIndex, "poll");
                 return { ...p, status };
               } catch (error) {
                 return { ...p, status: { status: "error", error: String(error) } };
@@ -75,12 +96,11 @@ export default function Home() {
 
           // Collect completed images and remaining pending
           const stillPending: PendingPrompt[] = [];
-          const newImages: GeneratedImage[] = [];
+          const readyToUpload: PendingPrompt[] = [];
 
           for (const r of results) {
-            if (r.status.status === "completed" && r.status.images) {
-              const incoming = r.status.images as unknown as GeneratedImage[];
-              newImages.push(...incoming);
+            if (r.status.status === "ready") {
+              readyToUpload.push({ promptId: r.promptId, apiIndex: r.apiIndex });
             } else if (r.status.status === "error") {
               console.error("Generation error:", r.status.error);
             } else {
@@ -88,20 +108,15 @@ export default function Home() {
             }
           }
 
-          // Add new images to preview
-          if (newImages.length > 0) {
-            setPreviewImages(prev => {
-              const filtered = newImages.filter(img => !prev.some(p => p.url === img.url));
-              return [...prev, ...filtered];
-            });
+          if (readyToUpload.length > 0) {
+            setUploadingPrompts(prev => [...prev, ...readyToUpload]);
+            readyToUpload.forEach(p => finalizeUpload(p));
           }
 
-          // Update pending if changed
           if (stillPending.length !== pendingPrompts.length) {
             setPendingPrompts(stillPending);
           }
 
-          // If all done, stop generating
           if (stillPending.length === 0) {
             setIsGenerating(false);
           }
@@ -111,6 +126,8 @@ export default function Home() {
       };
 
       timerRef.current = setInterval(poll, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
     }
 
     return () => {
@@ -160,7 +177,7 @@ export default function Home() {
           <main className="flex-1 overflow-y-auto">
             <div className="p-6 lg:p-8">
               {/* Unified Preview & Loading Grid - Desktop */}
-              {(isGenerating || previewImages.length > 0) && (
+              {(isGenerating || uploadingPrompts.length > 0 || previewImages.length > 0) && (
                 <div className="space-y-4 mb-8">
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-muted-foreground">
@@ -178,6 +195,23 @@ export default function Home() {
                         className="aspect-[3/4] rounded-xl overflow-hidden bg-white/5"
                       >
                         <img src={img.url} alt="" className="w-full h-full object-cover" />
+                      </motion.div>
+                    ))}
+
+                    {/* Render loading placeholders for uploading */}
+                    {uploadingPrompts.map((p, i) => (
+                      <motion.div
+                        key={`upload-${p.promptId}`}
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="aspect-[3/4] rounded-xl bg-white/5 border border-white/10 flex items-center justify-center relative overflow-hidden"
+                      >
+                        <div className="absolute inset-0 flex flex-col items-center justify-center">
+                          <div className="flex flex-col items-center gap-2">
+                            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                            <span className="text-xs text-muted-foreground animate-pulse">Uploading...</span>
+                          </div>
+                        </div>
                       </motion.div>
                     ))}
 
@@ -266,6 +300,23 @@ export default function Home() {
                             className="aspect-[3/4] rounded-xl overflow-hidden bg-white/5"
                           >
                             <img src={img.url} alt="" className="w-full h-full object-cover" />
+                          </motion.div>
+                        ))}
+
+                        {/* Uploading placeholders */}
+                        {uploadingPrompts.map((p, i) => (
+                          <motion.div
+                            key={`upload-mobile-${p.promptId}`}
+                            initial={{ opacity: 0, scale: 0.9 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            className="aspect-[3/4] rounded-xl bg-white/5 border border-white/10 flex items-center justify-center relative overflow-hidden"
+                          >
+                            <div className="absolute inset-0 flex flex-col items-center justify-center">
+                              <div className="flex flex-col items-center gap-2">
+                                <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                                <span className="text-xs text-muted-foreground animate-pulse">Uploading...</span>
+                              </div>
+                            </div>
                           </motion.div>
                         ))}
 
