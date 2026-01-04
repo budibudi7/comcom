@@ -6,7 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { PresetSelector } from "@/components/PresetSelector";
-import { generateImage, GenerationParams, enhancePrompt } from "@/app/actions";
+import { enhancePrompt } from "@/app/actions";
+import { GenerationParams } from "@/lib/types";
 import { Loader2, Sparkles, ChevronDown, ChevronUp, Shuffle, Wand2, Dices } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import characters from "@/data/char.json";
@@ -14,7 +15,7 @@ import characters from "@/data/char.json";
 
 interface GeneratorProps {
     onGenerateStart: () => void;
-    onGenerateSuccess: (prompts: Array<{ promptId: string; apiUrl: string }>) => void;
+    onGenerateSuccess: (prompts: Array<{ promptId: string; apiIndex: number }>) => void;
     isGenerating: boolean;
     initialPrompt?: string;
 }
@@ -38,6 +39,17 @@ export function Generator({ onGenerateStart, onGenerateSuccess, isGenerating, in
             setParams(prev => ({ ...prev, prompt: initialPrompt }));
         }
     }, [initialPrompt]);
+
+    const generateImage = async (params: GenerationParams) => {
+        const res = await fetch("/api/generate", {
+            method: "POST",
+            body: JSON.stringify(params),
+            headers: { "Content-Type": "application/json" }
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Generation failed");
+        return data;
+    };
 
     const handleGenerate = async () => {
         if (!params.prompt) return;

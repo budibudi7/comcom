@@ -1,0 +1,114 @@
+import { NextResponse } from "next/server";
+import { getHistory, getImageUrl, COMFY_API_URLS } from "@/lib/comfy";
+import { uploadImageToDrive } from "@/lib/googleDrive";
+
+interface ImageMetadata {
+    prompt: string;
+    negative_prompt: string;
+    seed: number;
+    steps: number;
+    cfg: number;
+    width: number;
+    height: number;
+}
+
+export async function GET(request: Request) {
+    const { searchParams } = new URL(request.url);
+    const promptId = searchParams.get("promptId");
+    const apiIndex = searchParams.get("apiIndex");
+
+    if (!promptId) {
+        return NextResponse.json({ status: "error", error: "Missing promptId" }, { status: 400 });
+    }
+
+    const targetApiUrl = apiIndex ? COMFY_API_URLS[parseInt(apiIndex)] : COMFY_API_URLS[0];
+
+    try {
+        const history = await getHistory(promptId, targetApiUrl);
+        if (!history[promptId]) {
+            return NextResponse.json({ status: "pending" });
+        }
+
+        const historyItem = history[promptId];
+        const outputs = historyItem.outputs;
+        const promptData = historyItem.prompt;
+
+        let workflow: any = {};
+        if (Array.isArray(promptData) && promptData.length > 2) {
+            workflow = promptData[2];
+        }
+
+        const metadata: ImageMetadata = {
+            prompt: "",
+            negative_prompt: "",
+            seed: 0,
+            steps: 0,
+            cfg: 0,
+            width: 0,
+            height: 0
+        };
+
+        if (workflow) {
+            // Node 3 is KSampler
+            if (workflow["3"] && workflow["3"].inputs) {
+                metadata.seed = workflow["3"].inputs.seed;
+                metadata.steps = workflow["3"].inputs.steps;
+                metadata.cfg = workflow["3"].inputs.cfg;
+            }
+            // Node 6 is Positive Prompt
+            if (workflow["6"] && workflow["6"].inputs) {
+                metadata.prompt = workflow["6"].inputs.text;
+            }
+            // Node 7 is Negative Prompt
+            if (workflow["7"] && workflow["7"].inputs) {
+                metadata.negative_prompt = workflow["7"].inputs.text;
+            }
+            // Node 5 is Empty Latent
+            if (workflow["5"] && workflow["5"].inputs) {
+                metadata.width = workflow["5"].inputs.width;
+                metadata.height = workflow["5"].inputs.height;
+            }
+        }
+
+        let images: any[] = [];
+        if (outputs["17"] && outputs["17"].images) {
+            images = outputs["17"].images;
+        }
+
+        if (images.length > 0) {
+            const resultImages = await Promise.all(images.map(async img => {
+                const originalUrl = getImageUrl(img.filename, img.subfolder, img.type, targetApiUrl);
+
+                try {
+                    // Fetch image from ComfyUI
+                    const res = await fetch(originalUrl);
+                    if (!res.ok) throw new Error("Failed to fetch image from Comfy");
+
+                    const arrayBuffer = await res.arrayBuffer();
+                    const buffer = Buffer.from(arrayBuffer);
+
+                    // Upload to Google Drive with deduplication (filename prefixed with promptId)
+                    const uniqueFilename = `${promptId}_${img.filename}`;
+                    const driveUrl = await uploadImageToDrive(buffer, uniqueFilename);
+
+                    return {
+                        url: driveUrl,
+                        metadata: metadata
+                    };
+                } catch (e) {
+                    console.error("Failed to upload to Drive, falling back to direct URL", e);
+                    return {
+                        url: originalUrl,
+                        metadata: metadata
+                    };
+                }
+            }));
+
+            return NextResponse.json({ status: "completed", images: resultImages });
+        }
+
+        return NextResponse.json({ status: "processing" });
+    } catch (error) {
+        return NextResponse.json({ status: "error", error: String(error) }, { status: 500 });
+    }
+}

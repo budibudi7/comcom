@@ -6,11 +6,10 @@ import { Generator } from "@/components/Generator";
 import { Gallery, GeneratedImage } from "@/components/Gallery";
 import { ChatAssistant } from "@/components/ChatAssistant";
 import { ProgressIndicator } from "@/components/ProgressIndicator";
-import { checkStatus } from "@/app/actions";
 import { motion, AnimatePresence } from "framer-motion";
 import { Images, Sparkles } from "lucide-react";
 
-type PendingPrompt = { promptId: string; apiUrl: string };
+type PendingPrompt = { promptId: string; apiIndex: number };
 
 export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
@@ -20,6 +19,7 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<"create" | "gallery">("create");
   const [promptFromEmptyState, setPromptFromEmptyState] = useState<string>("");
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const isPolling = useRef(false);
   const isLoaded = useRef(false);
 
   // Load from LocalStorage on mount
@@ -42,50 +42,71 @@ export default function Home() {
     }
   }, [images]);
 
+  const checkStatus = async (promptId: string, apiIndex: number) => {
+    const params = new URLSearchParams();
+    params.set("promptId", promptId);
+    params.set("apiIndex", apiIndex.toString());
+
+    // Use relative URL for client-side fetch matches current origin
+    const res = await fetch(`/api/status?${params.toString()}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Status check failed");
+    return data;
+  };
+
   // Polling for generation status - polls all pending prompts
   useEffect(() => {
     if (pendingPrompts.length > 0) {
       const poll = async () => {
-        const results = await Promise.all(
-          pendingPrompts.map(async (p) => {
-            try {
-              const status = await checkStatus(p.promptId, p.apiUrl);
-              return { ...p, status };
-            } catch (error) {
-              return { ...p, status: { status: "error", error: String(error) } };
+        if (isPolling.current) return;
+        isPolling.current = true;
+
+        try {
+          const results = await Promise.all(
+            pendingPrompts.map(async (p) => {
+              try {
+                const status = await checkStatus(p.promptId, p.apiIndex);
+                return { ...p, status };
+              } catch (error) {
+                return { ...p, status: { status: "error", error: String(error) } };
+              }
+            })
+          );
+
+          // Collect completed images and remaining pending
+          const stillPending: PendingPrompt[] = [];
+          const newImages: GeneratedImage[] = [];
+
+          for (const r of results) {
+            if (r.status.status === "completed" && r.status.images) {
+              const incoming = r.status.images as unknown as GeneratedImage[];
+              newImages.push(...incoming);
+            } else if (r.status.status === "error") {
+              console.error("Generation error:", r.status.error);
+            } else {
+              stillPending.push({ promptId: r.promptId, apiIndex: r.apiIndex });
             }
-          })
-        );
-
-        // Collect completed images and remaining pending
-        const stillPending: PendingPrompt[] = [];
-        const newImages: GeneratedImage[] = [];
-
-        for (const r of results) {
-          if (r.status.status === "completed" && r.status.images) {
-            const incoming = r.status.images as unknown as GeneratedImage[];
-            newImages.push(...incoming);
-          } else if (r.status.status === "error") {
-            console.error("Generation error:", r.status.error);
-          } else {
-            stillPending.push({ promptId: r.promptId, apiUrl: r.apiUrl });
           }
-        }
 
-        // Add new images to preview
-        if (newImages.length > 0) {
-          setPreviewImages(prev => {
-            const filtered = newImages.filter(img => !prev.some(p => p.url === img.url));
-            return [...prev, ...filtered];
-          });
-        }
+          // Add new images to preview
+          if (newImages.length > 0) {
+            setPreviewImages(prev => {
+              const filtered = newImages.filter(img => !prev.some(p => p.url === img.url));
+              return [...prev, ...filtered];
+            });
+          }
 
-        // Update pending
-        setPendingPrompts(stillPending);
+          // Update pending if changed
+          if (stillPending.length !== pendingPrompts.length) {
+            setPendingPrompts(stillPending);
+          }
 
-        // If all done, stop generating
-        if (stillPending.length === 0) {
-          setIsGenerating(false);
+          // If all done, stop generating
+          if (stillPending.length === 0) {
+            setIsGenerating(false);
+          }
+        } finally {
+          isPolling.current = false;
         }
       };
 
