@@ -67,6 +67,12 @@ export default function Home() {
           return [...prev, ...filtered];
         });
 
+        // Add to main history immediately for persistence
+        setImages(prev => {
+          const filtered = incoming.filter(img => !prev.some(p => p.url === img.url));
+          return [...filtered, ...prev];
+        });
+
         setUploadingPrompts(prev => prev.filter(item => item.promptId !== p.promptId));
       }
     } catch (e) {
@@ -140,9 +146,8 @@ export default function Home() {
   }, []);
 
   const handleGenerateStart = useCallback(() => {
-    // Move preview images to gallery
+    // Clear preview images as they are already in history
     if (previewImages.length > 0) {
-      setImages(prev => [...previewImages, ...prev]);
       setPreviewImages([]);
     }
     setIsGenerating(true);
