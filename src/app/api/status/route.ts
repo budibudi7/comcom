@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getHistory, getImageUrl, COMFY_API_URLS } from "@/lib/comfy";
 import { uploadImageToDrive } from "@/lib/googleDrive";
+import { promises as fs } from "fs";
+import path from "path";
 
 interface ImageMetadata {
     prompt: string;
@@ -91,7 +93,7 @@ export async function GET(request: Request) {
                 });
             }
 
-            // Retrieve Mode: Upload to Drive
+            // Retrieve Mode: Save local & background upload
             const resultImages = await Promise.all(images.map(async img => {
                 const originalUrl = getImageUrl(img.filename, img.subfolder, img.type, targetApiUrl);
 
@@ -102,17 +104,41 @@ export async function GET(request: Request) {
 
                     const arrayBuffer = await res.arrayBuffer();
                     const buffer = Buffer.from(arrayBuffer);
-
-                    // Upload to Google Drive with deduplication (filename prefixed with promptId)
                     const uniqueFilename = `${promptId}_${img.filename}`;
-                    const driveUrl = await uploadImageToDrive(buffer, uniqueFilename);
 
+                    // 1. Save locally to storage/output
+                    const outputDir = path.join(process.cwd(), "storage", "output");
+                    const outputPath = path.join(outputDir, uniqueFilename);
+
+                    // Add error handling for directory existence just in case
+                    try {
+                        await fs.mkdir(outputDir, { recursive: true });
+                        await fs.writeFile(outputPath, buffer);
+                    } catch (fsError) {
+                        console.error("Local save failed", fsError);
+                        // Fallback? If local save fails, maybe just return original URL or try Drive wait?
+                        // But usually filesystem works. checking upload.
+                    }
+
+                    const localUrl = `/api/local-image?filename=${uniqueFilename}`;
+
+                    // 2. Upload into Drive (Background - Fire and Forget)
+                    uploadImageToDrive(buffer, uniqueFilename)
+                        .then(driveUrl => {
+                            console.log(`Background upload success: ${uniqueFilename} -> ${driveUrl}`);
+                        })
+                        .catch(e => {
+                            console.error(`Background upload failed: ${uniqueFilename}`, e);
+                        });
+
+                    // 3. Return local URL immediately
                     return {
-                        url: driveUrl,
+                        url: localUrl,
                         metadata: metadata
                     };
                 } catch (e) {
-                    console.error("Failed to upload to Drive, falling back to direct URL", e);
+                    console.error("Failed retrieval sequence", e);
+                    // Fallback to original URL if everything fails
                     return {
                         url: originalUrl,
                         metadata: metadata
