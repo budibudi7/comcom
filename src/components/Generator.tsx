@@ -22,8 +22,8 @@ interface GeneratorProps {
 
 export function Generator({ onGenerateStart, onGenerateSuccess, isGenerating, initialPrompt }: GeneratorProps) {
     const [params, setParams] = useState<GenerationParams>({
-        prompt: "",
-        negative_prompt: "low quality, bad anatomy, worst quality, watermark, text, blurry",
+        prompt: "masterpiece, best quality, amazing quality, very aesthetic, absurdres, ultra detailed face, ultra detailed eyes",
+        negative_prompt: "bad quality,worst quality,worst detail,sketch,censor, extra limbs, deformed fingers, bad anatomy, mutated body, lowres, worst quality, low quality, low score, bad score, blurry, text, ugly, hooded eyes, watermark, pale, bad hands, bad anatomy, bad proportions, poorly drawn face, poorly drawn hand, missing finger, extra limbs, blurry, pixelated, distorted, lowres, jpeg artifacts, watermark, signature, text, (deformed:1.5), (bad hand:1.3), overexposed, underexposed, censored, mutated, extra finger, cloned face, bad eyes,",
         width: 832,
         height: 1216,
         steps: 20,
