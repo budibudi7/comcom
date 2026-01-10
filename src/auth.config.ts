@@ -27,4 +27,5 @@ export const authConfig = {
         }
     },
     providers: [], // Providers array empty here to avoid Node.js modules in Edge
+    trustHost: true,
 } satisfies NextAuthConfig;
