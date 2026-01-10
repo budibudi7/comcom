@@ -1,5 +1,12 @@
 import { NextResponse } from "next/server";
 import { queuePrompt, COMFY_API_URLS, PromptResponse, ComfyWorkflow } from "@/lib/comfy";
+import { rateLimit } from "@/lib/ratelimit";
+import { auth } from "@/auth";
+
+const limiter = rateLimit({
+    interval: 60 * 1000, // 60 seconds
+    uniqueTokenPerInterval: 500, // Max 500 users per second
+});
 
 const BASE_WORKFLOW = {
     "3": {
@@ -90,6 +97,23 @@ const BASE_WORKFLOW = {
 export async function POST(request: Request) {
     try {
         const params = await request.json();
+
+        // Rate Limit Check
+        const session = await auth();
+        const ip = request.headers.get("x-forwarded-for") ?? "127.0.0.1";
+
+        // Use user ID if logged in, otherwise IP (though we block non-logged in users in middleware, this is safe)
+        const identifier = session?.user?.email ?? ip;
+
+        const { isRateLimited, limit, remaining } = await limiter.check(5, identifier); // 5 requests per minute per user
+
+        if (isRateLimited) {
+            return NextResponse.json(
+                { success: false, error: "Rate limit exceeded. Please try again later." },
+                { status: 429, headers: { "X-RateLimit-Limit": limit.toString(), "X-RateLimit-Remaining": remaining.toString() } }
+            );
+        }
+
         const workflow = JSON.parse(JSON.stringify(BASE_WORKFLOW));
 
         // Map params to workflow

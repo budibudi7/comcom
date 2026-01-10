@@ -3,6 +3,75 @@
 import OpenAI from "openai";
 import { promises as fs } from "fs";
 import path from "path";
+import { createUser } from "@/lib/db";
+import { z } from "zod";
+import { signIn } from "@/auth";
+import { AuthError } from "next-auth";
+
+// Assuming SignupSchema and signIn are defined/imported elsewhere, as they are used in the provided code.
+// For the purpose of this edit, I will assume they are available.
+// If SignupSchema is not defined, this will cause a reference error.
+// If signIn is not defined, this will cause a reference error.
+// For example, SignupSchema might be:
+const SignupSchema = z.object({
+    email: z.string().email(),
+    password: z.string().min(6),
+});
+// And signIn might be imported from next-auth:
+// import { signIn } from "@/auth"; // Assuming this path
+
+export async function signup(prevState: any, formData: FormData) {
+    const validatedFields = SignupSchema.safeParse(Object.fromEntries(formData));
+
+    if (!validatedFields.success) {
+        return {
+            errors: validatedFields.error.flatten().fieldErrors,
+        };
+    }
+
+    const { email, password } = validatedFields.data;
+
+    try {
+        await createUser(email, password);
+    } catch (error) {
+        if (error instanceof Error && error.message === "User already exists") {
+            return { message: "User already exists" };
+        }
+        console.error("Signup error:", error);
+        return { message: "Failed to create account" };
+    }
+
+    // Auto login after signup
+    try {
+        await signIn("credentials", { email, password, redirectTo: "/dashboard" });
+    } catch (error) {
+        if (error instanceof AuthError) {
+            switch (error.type) {
+                case "CredentialsSignin":
+                    return { message: "Invalid credentials." };
+                default:
+                    return { message: "Something went wrong." };
+            }
+        }
+        throw error; // Rethrow redirect
+    }
+}
+
+export async function authenticate(prevState: string | undefined, formData: FormData) {
+    try {
+        await signIn("credentials", { ...Object.fromEntries(formData), redirectTo: "/dashboard" });
+    } catch (error) {
+        if (error instanceof AuthError) {
+            switch (error.type) {
+                case 'CredentialsSignin':
+                    return 'Invalid credentials.';
+                default:
+                    return 'Something went wrong.';
+            }
+        }
+        throw error;
+    }
+}
 
 /* ===============================
    CONFIG
